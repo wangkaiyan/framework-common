@@ -1,17 +1,11 @@
 package com.framework.redis;
 
+import com.framework.util.SerializeUtil;
 import org.apache.log4j.Logger;
-import redis.clients.jedis.JedisPoolConfig;
-import redis.clients.jedis.JedisShardInfo;
-import redis.clients.jedis.ShardedJedis;
-import redis.clients.jedis.ShardedJedisPool;
+import redis.clients.jedis.*;
 
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Properties;
+import java.io.*;
+import java.util.*;
 
 /**
  * Created by wangkaiyan on 2017/11/17.
@@ -36,8 +30,20 @@ public class ShardJedisClient {
     }
 
     private void initial() throws FileNotFoundException, IOException {
+        File file = new File(config_path);
+        Reader reader = null;
+        if(file.exists()) {
+            try {
+                reader = new FileReader(config_path);
+            } catch (FileNotFoundException e) {
+                reader = new InputStreamReader(ShardJedisClient.class.getResourceAsStream("/"+config_path));
+            }
+        }else{
+            reader = new InputStreamReader(ShardJedisClient.class.getResourceAsStream("/"+config_path));
+        }
+
         // 加载redis配置文件
-        properties.load(new FileReader(config_path));
+        properties.load(reader);
         // 创建jedis池配置实例
         JedisPoolConfig config = new JedisPoolConfig();
         // 设置池配置项值
@@ -50,9 +56,9 @@ public class ShardJedisClient {
         // 根据配置创建多个redis共享服务
         int redis_num = Integer.valueOf(properties.getProperty("redis.num"));
         List<JedisShardInfo> list = new LinkedList<JedisShardInfo>();
-        if(redis_num>0){
-            for(int i=0;i<redis_num;i++){
-                JedisShardInfo jedisShardInfo = new JedisShardInfo(properties.getProperty("redis"+i+".ip"), Integer.valueOf(properties.getProperty("redis"+i+".port")));
+        if (redis_num > 0) {
+            for (int i = 0; i < redis_num; i++) {
+                JedisShardInfo jedisShardInfo = new JedisShardInfo(properties.getProperty("redis" + i + ".ip"), Integer.valueOf(properties.getProperty("redis" + i + ".port")));
                 list.add(jedisShardInfo);
             }
         }
@@ -247,5 +253,46 @@ public class ShardJedisClient {
         }
         shardPool.returnResource(shardJedis);
         return result;
+    }
+
+
+    public byte[] get(byte[] key) {
+        ShardedJedis shardJedis = shardPool.getResource();
+        byte[] result = null;
+        try {
+            result = shardJedis.get(key);
+        } catch (Exception e) {
+            shardPool.returnBrokenResource(shardJedis);
+            log.error("redis get error!"+e);
+            return result;
+        }
+        shardPool.returnResource(shardJedis);
+        return result;
+    }
+
+    public <T extends Serializable> List<T> hvalsToObject(String key){
+        List<T> list= new ArrayList<T>();
+        ShardedJedis shardJedis = shardPool.getResource();
+        Collection<byte[]> result = null;
+        try {
+            result = shardJedis.hvals(key.getBytes());
+        } catch (Exception e) {
+            shardPool.returnBrokenResource(shardJedis);
+            log.error("redis hvalsToObject error!"+e);
+            return null;
+        }
+        shardPool.returnResource(shardJedis);
+        Iterator<byte[]> it= result.iterator();
+        while(it.hasNext()){
+            list.add((T) SerializeUtil.decode(it.next()));
+        }
+        return list;
+    }
+
+
+    public ShardedJedisPipeline getPipeline(){
+        ShardedJedis shardJedis = shardPool.getResource();
+        ShardedJedisPipeline pipeline  = shardJedis.pipelined();
+        return pipeline;
     }
 }
